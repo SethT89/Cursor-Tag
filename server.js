@@ -1,11 +1,12 @@
 const WebSocket = require('ws');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const PORT = process.env.PORT || 8080;
-const TAG_DISTANCE_PCT = 5;     // % of game area
-const GAME_DURATION_MS = 60000; // 60 seconds
+const TAG_DISTANCE_PCT = 5;
+const GAME_DURATION_MS = 60000;
 const COUNTDOWN_SECONDS = 3;
 const TAG_IMMUNITY_MS = 3000;
 const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
@@ -57,9 +58,9 @@ function updateLeaderboard(players) {
 }
 
 // ─── Room & player state ─────────────────────────────────────────────────────
-const rooms = new Map(); // roomCode → Room
-const clientToRoom = new Map(); // ws → roomCode
-const clientToPlayer = new Map(); // ws → playerId
+const rooms = new Map();
+const clientToRoom = new Map();
+const clientToPlayer = new Map();
 
 function createRoom(hostWs, hostName) {
   const roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
@@ -73,7 +74,6 @@ function createRoom(hostWs, hostName) {
     immune: false,
     immuneUntil: 0,
     ws: hostWs,
-    // stats
     timeNotIt: 0,
     tagsMade: 0,
     fastestTag: null,
@@ -82,7 +82,7 @@ function createRoom(hostWs, hostName) {
   };
   const room = {
     code: roomCode,
-    state: 'waiting', // waiting | countdown | playing | ended
+    state: 'waiting',
     players: new Map([[playerId, player]]),
     itPlayerId: null,
     gameStartTime: null,
@@ -126,8 +126,8 @@ function joinRoom(ws, roomCode, playerName) {
   return { playerId, player };
 }
 
-function serializePlayer(p, includePrivate = false) {
-  const base = {
+function serializePlayer(p) {
+  return {
     id: p.id,
     name: p.name,
     color: p.color,
@@ -140,7 +140,6 @@ function serializePlayer(p, includePrivate = false) {
     tagsMade: p.tagsMade,
     fastestTag: p.fastestTag,
   };
-  return base;
 }
 
 function broadcastToRoom(room, msg, excludeWs = null) {
@@ -179,7 +178,6 @@ function startGame(roomCode) {
   const room = rooms.get(roomCode);
   if (!room) return;
 
-  // Pick random IT
   const playerList = Array.from(room.players.values());
   const itPlayer = playerList[Math.floor(Math.random() * playerList.length)];
   itPlayer.isIt = true;
@@ -197,10 +195,7 @@ function startGame(roomCode) {
     duration: GAME_DURATION_MS,
   });
 
-  // Game tick every 100ms
   room.stateInterval = setInterval(() => gameTick(roomCode), 100);
-
-  // End game after duration
   room.gameTimer = setTimeout(() => endGame(roomCode), GAME_DURATION_MS);
 }
 
@@ -213,17 +208,12 @@ function gameTick(roomCode) {
   room.lastTickTime = now;
   const timeLeft = Math.max(0, GAME_DURATION_MS - (now - room.gameStartTime));
 
-  // Update player stats
   const playerList = Array.from(room.players.values());
   playerList.forEach(p => {
     if (!p.isIt) p.timeNotIt += dt;
-    // Update immunity
-    if (p.immune && now >= p.immuneUntil) {
-      p.immune = false;
-    }
+    if (p.immune && now >= p.immuneUntil) p.immune = false;
   });
 
-  // Check for tag collisions
   const itPlayer = room.players.get(room.itPlayerId);
   if (itPlayer && !itPlayer.immune) {
     for (const p of playerList) {
@@ -238,7 +228,6 @@ function gameTick(roomCode) {
     }
   }
 
-  // Broadcast state every tick
   broadcastToRoom(room, {
     type: 'gameState',
     players: getPlayers(room),
@@ -248,7 +237,6 @@ function gameTick(roomCode) {
 }
 
 function performTag(room, tagger, target, now) {
-  // Fastest tag stat
   if (tagger.becameItAt) {
     const elapsed = now - tagger.becameItAt;
     if (tagger.fastestTag === null || elapsed < tagger.fastestTag) {
@@ -257,7 +245,6 @@ function performTag(room, tagger, target, now) {
     tagger.tagsMade++;
   }
 
-  // Transfer IT
   tagger.isIt = false;
   tagger.immune = true;
   tagger.immuneUntil = now + TAG_IMMUNITY_MS;
@@ -283,28 +270,17 @@ function endGame(roomCode) {
   room.state = 'ended';
 
   const playerList = Array.from(room.players.values());
-
-  // Calculate scores
   const totalTime = GAME_DURATION_MS;
+
   const scoredPlayers = playerList.map(p => {
     let score = 0;
     const notItPct = p.timeNotIt / totalTime;
-
-    // Category: Longest time NOT IT (up to 1000 pts)
     score += Math.round(notItPct * 1000);
-
-    // Category: Survival bonus — never IT (500 pts)
     if (!p.wasEverIt) score += 500;
-
-    // Category: Fastest tag (up to 300 pts — faster = more points)
     if (p.fastestTag !== null) {
-      const speedBonus = Math.max(0, 300 - Math.round(p.fastestTag / 100));
-      score += speedBonus;
+      score += Math.max(0, 300 - Math.round(p.fastestTag / 100));
     }
-
-    // Penalty: being IT when game ends
-    const itAtEnd = p.id === room.itPlayerId;
-    if (itAtEnd) score = Math.max(0, score - 200);
+    if (p.id === room.itPlayerId) score = Math.max(0, score - 200);
 
     return {
       ...serializePlayer(p),
@@ -320,33 +296,23 @@ function endGame(roomCode) {
     };
   });
 
-  // Rank by score
   scoredPlayers.sort((a, b) => b.score - a.score);
   scoredPlayers.forEach((p, i) => { p.rank = i + 1; });
 
   updateLeaderboard(scoredPlayers);
   const leaderboard = loadLeaderboard().slice(0, 10);
 
-  broadcastToRoom(room, {
-    type: 'gameEnded',
-    players: scoredPlayers,
-    leaderboard,
-  });
-
-  // Clean up room after 30s
+  broadcastToRoom(room, { type: 'gameEnded', players: scoredPlayers, leaderboard });
   setTimeout(() => rooms.delete(roomCode), 30000);
 }
 
-// ─── WebSocket server ────────────────────────────────────────────────────────
-const http = require('http');
+// ─── HTTP + WebSocket server ─────────────────────────────────────────────────
 const httpServer = http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end('Cursor Tag server running');
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Cursor Tag server is running');
 });
+
 const wss = new WebSocket.Server({ server: httpServer });
-httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`Cursor Tag server running on ws://localhost:${PORT}`);
-});
 
 wss.on('connection', ws => {
   console.log('Client connected');
@@ -388,16 +354,12 @@ wss.on('connection', ws => {
           players: getPlayers(r),
           color: result.player.color,
         }));
-        broadcastToRoom(r, {
-          type: 'playerJoined',
-          players: getPlayers(r),
-        }, ws);
+        broadcastToRoom(r, { type: 'playerJoined', players: getPlayers(r) }, ws);
         break;
       }
 
       case 'startGame': {
         if (!room || room.state !== 'waiting') return;
-        // Only host (first player) can start
         const firstPlayer = Array.from(room.players.values())[0];
         if (firstPlayer.id !== playerId) return;
         if (room.players.size < 2) {
@@ -437,7 +399,6 @@ wss.on('connection', ws => {
           clearTimeout(room.gameTimer);
           rooms.delete(roomCode);
         } else {
-          // If IT player left during game, assign IT to someone else
           if (room.state === 'playing' && room.itPlayerId === playerId) {
             const remaining = Array.from(room.players.values());
             const newIt = remaining[Math.floor(Math.random() * remaining.length)];
@@ -454,4 +415,8 @@ wss.on('connection', ws => {
     clientToPlayer.delete(ws);
     console.log('Client disconnected');
   });
+});
+
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Cursor Tag server running on port ${PORT}`);
 });
