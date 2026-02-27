@@ -359,7 +359,7 @@ wss.on('connection', ws => {
       }
 
       case 'startGame': {
-        if (!room || room.state !== 'waiting') return;
+  if (!room || (room.state !== 'waiting' && room.state !== 'ended')) return;
         const firstPlayer = Array.from(room.players.values())[0];
         if (firstPlayer.id !== playerId) return;
         if (room.players.size < 2) {
@@ -369,7 +369,29 @@ wss.on('connection', ws => {
         startCountdown(roomCode);
         break;
       }
-
+case 'playAgain': {
+  if (!room || room.state !== 'ended') return;
+  // Reset room back to waiting
+  room.state = 'waiting';
+  room.itPlayerId = null;
+  room.players.forEach(p => {
+    p.isIt = false;
+    p.immune = false;
+    p.immuneUntil = 0;
+    p.timeNotIt = 0;
+    p.tagsMade = 0;
+    p.fastestTag = null;
+    p.becameItAt = null;
+    p.wasEverIt = false;
+    p.x = 20 + Math.random() * 60;
+    p.y = 20 + Math.random() * 60;
+  });
+  broadcastToRoom(room, {
+    type: 'playAgain',
+    players: getPlayers(room),
+  });
+  break;
+}
       case 'move': {
         if (!player || !room || room.state !== 'playing') return;
         player.x = Math.max(0, Math.min(100, msg.x));
