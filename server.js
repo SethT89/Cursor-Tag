@@ -338,8 +338,15 @@ function endGame(roomCode) {
 }
 
 // ─── WebSocket server ────────────────────────────────────────────────────────
-const wss = new WebSocket.Server({ port: PORT });
-console.log(`Cursor Tag server running on ws://localhost:${PORT}`);
+const http = require('http');
+const httpServer = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Cursor Tag server running');
+});
+const wss = new WebSocket.Server({ server: httpServer });
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Cursor Tag server running on ws://localhost:${PORT}`);
+});
 
 wss.on('connection', ws => {
   console.log('Client connected');
