@@ -350,11 +350,12 @@ function startGame(roomCode) {
   room.lastTickTime = Date.now();
 
   broadcastToRoom(room, {
-    type: 'gameStarted',
-    players: getPlayers(room),
-    itPlayerId: itPlayer.id,
-    duration: GAME_DURATION_MS,
-  });
+  type: 'gameStarted',
+  players: getPlayers(room),
+  itPlayerId: itPlayer.id,
+  duration: GAME_DURATION_MS,
+  tagDistance: TAG_DISTANCE_PCT,
+});
 
   room.stateInterval = setInterval(() => gameTick(roomCode), 100);
   room.gameTimer = setTimeout(() => endGame(roomCode), GAME_DURATION_MS);
