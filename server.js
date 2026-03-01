@@ -5,7 +5,7 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const PORT = process.env.PORT || 8080;
-const TAG_DISTANCE_PCT = 15;
+const TAG_DISTANCE_PCT = 8;
 const GAME_DURATION_MS = 60000;
 const COUNTDOWN_SECONDS = 3;
 const TAG_IMMUNITY_MS = 3000;
