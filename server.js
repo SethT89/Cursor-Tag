@@ -5,7 +5,7 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const PORT = process.env.PORT || 8080;
-const TAG_DISTANCE_PCT = 5;
+const TAG_DISTANCE_PCT = 8;
 const GAME_DURATION_MS = 60000;
 const COUNTDOWN_SECONDS = 3;
 const TAG_IMMUNITY_MS = 3000;
@@ -387,13 +387,25 @@ function gameTick(roomCode) {
     }
   });
 
-  // Tag collisions
+  // Tag collisions — swept detection catches fast-moving bots that skip through hitbox
   const itPlayer = room.players.get(room.itPlayerId);
   if (itPlayer && !itPlayer.immune) {
     for (const p of playerList) {
       if (p.id === itPlayer.id || p.immune) continue;
+
+      // Current position check
       const dx = itPlayer.x - p.x, dy = itPlayer.y - p.y;
-      if (Math.sqrt(dx * dx + dy * dy) < TAG_DISTANCE_PCT) {
+      const currentDist = Math.sqrt(dx * dx + dy * dy);
+
+      // Swept check: also test midpoint between prev and current positions
+      const midItX = (itPlayer.x + (itPlayer.prevX || itPlayer.x)) / 2;
+      const midItY = (itPlayer.y + (itPlayer.prevY || itPlayer.y)) / 2;
+      const midPX  = (p.x + (p.prevX || p.x)) / 2;
+      const midPY  = (p.y + (p.prevY || p.y)) / 2;
+      const mdx = midItX - midPX, mdy = midItY - midPY;
+      const midDist = Math.sqrt(mdx * mdx + mdy * mdy);
+
+      if (currentDist < TAG_DISTANCE_PCT || midDist < TAG_DISTANCE_PCT) {
         performTag(room, itPlayer, p, now);
         break;
       }
