@@ -28,7 +28,7 @@ const BOT_NAMES = [
 const DIFFICULTY = {
   easy:   { speed: 0.6,  accuracy: 0.4, mistakeChance: 0.35, reactionTicks: 8  },
   medium: { speed: 1.1,  accuracy: 0.7, mistakeChance: 0.15, reactionTicks: 4  },
-  hard:   { speed: 1.7,  accuracy: 0.95, mistakeChance: 0.04, reactionTicks: 1 },
+  hard:   { speed: 3.7,  accuracy: 1.95, mistakeChance: 0.04, reactionTicks: .5 },
 };
 
 // ─── Leaderboard ──────────────────────────────────────────────────────────────
