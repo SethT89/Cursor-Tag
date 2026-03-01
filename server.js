@@ -16,7 +16,22 @@ const PLAYER_COLORS = [
   '#C84BFF', '#FF4BC8', '#4BFFE4', '#FFE44B',
 ];
 
-// ─── Leaderboard ─────────────────────────────────────────────────────────────
+// ─── Bot personalities ────────────────────────────────────────────────────────
+const BOT_NAMES = [
+  'Dizzy', 'Cheddar', 'Glitch', 'Turbo', 'Biscuit', 'Noodle',
+  'Zapper', 'Pudding', 'Chaos', 'Wobble', 'Socks', 'Blip',
+  'Frenzy', 'Mochi', 'Zigzag', 'Crispy', 'Doodle', 'Sparky',
+  'Pickle', 'Waffles', 'Bonkers', 'Fizz', 'Peanut', 'Rascal',
+];
+
+// Difficulty settings
+const DIFFICULTY = {
+  easy:   { speed: 0.6,  accuracy: 0.4, mistakeChance: 0.35, reactionTicks: 8  },
+  medium: { speed: 1.1,  accuracy: 0.7, mistakeChance: 0.15, reactionTicks: 4  },
+  hard:   { speed: 1.7,  accuracy: 0.95, mistakeChance: 0.04, reactionTicks: 1 },
+};
+
+// ─── Leaderboard ──────────────────────────────────────────────────────────────
 function loadLeaderboard() {
   try {
     if (fs.existsSync(LEADERBOARD_FILE))
@@ -31,7 +46,7 @@ function saveLeaderboard(entries) {
 
 function updateLeaderboard(players) {
   const board = loadLeaderboard();
-  players.forEach(p => {
+  players.filter(p => !p.isBot).forEach(p => {
     const existing = board.find(e => e.name.toLowerCase() === p.name.toLowerCase());
     if (existing) {
       existing.gamesPlayed = (existing.gamesPlayed || 0) + 1;
@@ -51,20 +66,39 @@ const rooms = new Map();
 const clientToRoom = new Map();
 const clientToPlayer = new Map();
 
+function makePlayer(id, name, color, ws, isBot = false, difficulty = null) {
+  return {
+    id, name, color, ws, isBot,
+    difficulty: difficulty || null,
+    x: 20 + Math.random() * 60,
+    y: 20 + Math.random() * 60,
+    prevX: 50, prevY: 50,
+    isIt: false, immune: false, immuneUntil: 0,
+    timeNotIt: 0, tagsMade: 0, fastestTag: null,
+    becameItAt: null, wasEverIt: false,
+    timesTagged: 0, lastTaggerId: null, retags: 0,
+    totalDistance: 0, cornerTime: 0, edgeTime: 0,
+    itStreaks: [], currentItStart: null,
+    opportunistTags: 0, lastMoveTime: null,
+    trackingActive: false,
+    // Bot AI state
+    botTargetX: 50, botTargetY: 50,
+    botTickCounter: 0,
+    botWanderAngle: Math.random() * Math.PI * 2,
+  };
+}
+
 function createRoom(hostWs, hostName) {
   const roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
   const playerId = uuidv4();
   const player = makePlayer(playerId, hostName, PLAYER_COLORS[0], hostWs);
   const room = {
-    code: roomCode,
-    state: 'waiting',
+    code: roomCode, state: 'waiting',
     players: new Map([[playerId, player]]),
-    itPlayerId: null,
-    gameStartTime: null,
-    gameTimer: null,
-    stateInterval: null,
-    lastTickTime: null,
-    firstTaggedId: null,
+    itPlayerId: null, gameStartTime: null,
+    gameTimer: null, stateInterval: null,
+    lastTickTime: null, firstTaggedId: null,
+    usedBotNames: new Set(),
   };
   rooms.set(roomCode, room);
   clientToRoom.set(hostWs, roomCode);
@@ -72,33 +106,21 @@ function createRoom(hostWs, hostName) {
   return { roomCode, playerId, player };
 }
 
-function makePlayer(id, name, color, ws) {
-  return {
-    id, name, color, ws,
-    x: 20 + Math.random() * 60,
-    y: 20 + Math.random() * 60,
-    prevX: 50, prevY: 50,
-    isIt: false,
-    immune: false,
-    immuneUntil: 0,
-    // scoring stats
-    timeNotIt: 0,
-    tagsMade: 0,
-    fastestTag: null,
-    becameItAt: null,
-    wasEverIt: false,
-    timesTagged: 0,
-    lastTaggerId: null,
-    retags: 0,
-    totalDistance: 0,
-    cornerTime: 0,
-    edgeTime: 0,
-    itStreaks: [],        // array of ms durations for each IT stint
-    currentItStart: null,
-    opportunistTags: 0,
-    lastMoveTime: null,
-    trackingActive: false, // starts at countdown
-  };
+function addBot(room, difficulty) {
+  if (room.players.size >= 8) return null;
+
+  // Pick a unique bot name
+  const available = BOT_NAMES.filter(n => !room.usedBotNames.has(n));
+  const name = available.length > 0
+    ? available[Math.floor(Math.random() * available.length)]
+    : `Bot${room.players.size + 1}`;
+  room.usedBotNames.add(name);
+
+  const colorIndex = room.players.size % PLAYER_COLORS.length;
+  const botId = uuidv4();
+  const bot = makePlayer(botId, name, PLAYER_COLORS[colorIndex], null, true, difficulty);
+  room.players.set(botId, bot);
+  return bot;
 }
 
 function joinRoom(ws, roomCode, playerName) {
@@ -119,22 +141,19 @@ function joinRoom(ws, roomCode, playerName) {
 function serializePlayer(p) {
   return {
     id: p.id, name: p.name, color: p.color,
-    x: p.x, y: p.y,
-    isIt: p.isIt, immune: p.immune,
-    wasEverIt: p.wasEverIt,
-    timeNotIt: p.timeNotIt,
-    tagsMade: p.tagsMade,
-    fastestTag: p.fastestTag,
-    timesTagged: p.timesTagged,
-    retags: p.retags,
+    x: p.x, y: p.y, isIt: p.isIt, immune: p.immune,
+    wasEverIt: p.wasEverIt, timeNotIt: p.timeNotIt,
+    tagsMade: p.tagsMade, fastestTag: p.fastestTag,
+    timesTagged: p.timesTagged, retags: p.retags,
     totalDistance: p.totalDistance,
+    isBot: p.isBot, difficulty: p.difficulty,
   };
 }
 
 function broadcastToRoom(room, msg, excludeWs = null) {
   const data = JSON.stringify(msg);
   room.players.forEach(p => {
-    if (p.ws !== excludeWs && p.ws.readyState === WebSocket.OPEN)
+    if (!p.isBot && p.ws !== excludeWs && p.ws && p.ws.readyState === WebSocket.OPEN)
       p.ws.send(data);
   });
 }
@@ -143,48 +162,124 @@ function getPlayers(room) {
   return Array.from(room.players.values()).map(serializePlayer);
 }
 
-// ─── Live score calculation ───────────────────────────────────────────────────
-function calcLiveScore(p, room) {
-  // 10 pts per second not IT
-  const notItScore = Math.floor(p.timeNotIt / 100); // 10pts per sec = 1pt per 100ms
-  return notItScore;
-}
-
+// ─── Live scores ──────────────────────────────────────────────────────────────
 function getLiveScores(room) {
   return Array.from(room.players.values())
-    .map(p => ({ id: p.id, name: p.name, color: p.color, score: calcLiveScore(p, room), isIt: p.isIt }))
+    .map(p => ({ id: p.id, name: p.name, color: p.color, score: Math.floor(p.timeNotIt / 100), isIt: p.isIt, isBot: p.isBot }))
     .sort((a, b) => b.score - a.score);
+}
+
+// ─── Bot AI ───────────────────────────────────────────────────────────────────
+function updateBot(bot, room, dt) {
+  if (!bot.isBot || !bot.trackingActive) return;
+
+  const diff = DIFFICULTY[bot.difficulty || 'medium'];
+  bot.botTickCounter++;
+
+  // Only recalculate target every N ticks (reaction time)
+  if (bot.botTickCounter % diff.reactionTicks === 0) {
+    const playerList = Array.from(room.players.values());
+
+    if (bot.isIt) {
+      // Chase nearest non-immune player
+      let nearest = null, nearestDist = Infinity;
+      playerList.forEach(p => {
+        if (p.id === bot.id || p.immune) return;
+        const dx = p.x - bot.x, dy = p.y - bot.y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < nearestDist) { nearestDist = d; nearest = p; }
+      });
+
+      if (nearest) {
+        // Apply accuracy — hard bots aim perfectly, easy bots aim off
+        const noise = (1 - diff.accuracy) * 20;
+        bot.botTargetX = nearest.x + (Math.random() - 0.5) * noise;
+        bot.botTargetY = nearest.y + (Math.random() - 0.5) * noise;
+      }
+    } else {
+      // Flee from IT player
+      const itPlayer = room.players.get(room.itPlayerId);
+      if (itPlayer && itPlayer.id !== bot.id) {
+        const dx = bot.x - itPlayer.x;
+        const dy = bot.y - itPlayer.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 30) {
+          // Run away — opposite direction from IT
+          const fleeX = bot.x + (dx / dist) * 25;
+          const fleeY = bot.y + (dy / dist) * 25;
+
+          // Avoid corners
+          const targetX = Math.max(15, Math.min(85, fleeX));
+          const targetY = Math.max(15, Math.min(85, fleeY));
+
+          const noise = (1 - diff.accuracy) * 10;
+          bot.botTargetX = targetX + (Math.random() - 0.5) * noise;
+          bot.botTargetY = targetY + (Math.random() - 0.5) * noise;
+        } else {
+          // Wander naturally when far from IT
+          bot.botWanderAngle += (Math.random() - 0.5) * 0.5;
+          bot.botTargetX = bot.x + Math.cos(bot.botWanderAngle) * 8;
+          bot.botTargetY = bot.y + Math.sin(bot.botWanderAngle) * 8;
+
+          // Avoid corners
+          if (bot.botTargetX < 10) { bot.botTargetX = 15; bot.botWanderAngle = 0; }
+          if (bot.botTargetX > 90) { bot.botTargetX = 85; bot.botWanderAngle = Math.PI; }
+          if (bot.botTargetY < 10) { bot.botTargetY = 15; bot.botWanderAngle = Math.PI / 2; }
+          if (bot.botTargetY > 90) { bot.botTargetY = 85; bot.botWanderAngle = -Math.PI / 2; }
+        }
+      }
+    }
+
+    // Occasional mistake — random drift
+    if (Math.random() < diff.mistakeChance) {
+      bot.botTargetX = 10 + Math.random() * 80;
+      bot.botTargetY = 10 + Math.random() * 80;
+    }
+
+    // Clamp target to arena
+    bot.botTargetX = Math.max(5, Math.min(95, bot.botTargetX));
+    bot.botTargetY = Math.max(5, Math.min(95, bot.botTargetY));
+  }
+
+  // Move toward target
+  const speed = diff.speed * (dt / 100);
+  const dx = bot.botTargetX - bot.x;
+  const dy = bot.botTargetY - bot.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist > 0.1) {
+    bot.x += (dx / dist) * Math.min(speed, dist);
+    bot.y += (dy / dist) * Math.min(speed, dist);
+  }
+
+  bot.x = Math.max(0, Math.min(100, bot.x));
+  bot.y = Math.max(0, Math.min(100, bot.y));
 }
 
 // ─── Personality awards ───────────────────────────────────────────────────────
 const AWARDS = {
-  panicMouse:       { emoji: '🐁', title: 'Panic Mouse',          desc: 'Most frantic movement' },
-  escapeArtist:     { emoji: '🐇', title: 'Escape Artist',        desc: 'Never got tagged' },
-  cornerRat:        { emoji: '🐀', title: 'Corner Rat',           desc: 'Most time hiding in corners' },
-  revengeSeeker:    { emoji: '🔄', title: 'Revenge Seeker',       desc: 'Most re-tags' },
-  magnetToDanger:   { emoji: '🧲', title: 'Magnet to Danger',     desc: 'Got tagged the most' },
-  anchoredToWalls:  { emoji: '🪨', title: 'Anchored to Walls',    desc: 'Most time near edges' },
-  sacrificialLamb:  { emoji: '🐑', title: 'Sacrificial Lamb',     desc: 'First to get tagged' },
-  opportunist:      { emoji: '👀', title: 'Opportunist',          desc: 'Tagged the most idle players' },
+  panicMouse:      { emoji: '🐁', title: 'Panic Mouse',       desc: 'Most frantic movement' },
+  escapeArtist:    { emoji: '🐇', title: 'Escape Artist',     desc: 'Never got tagged' },
+  cornerRat:       { emoji: '🐀', title: 'Corner Rat',        desc: 'Most time hiding in corners' },
+  revengeSeeker:   { emoji: '🔄', title: 'Revenge Seeker',    desc: 'Most re-tags' },
+  magnetToDanger:  { emoji: '🧲', title: 'Magnet to Danger',  desc: 'Got tagged the most' },
+  anchoredToWalls: { emoji: '🪨', title: 'Anchored to Walls', desc: 'Most time near edges' },
+  sacrificialLamb: { emoji: '🐑', title: 'Sacrificial Lamb',  desc: 'First to get tagged' },
+  opportunist:     { emoji: '👀', title: 'Opportunist',       desc: 'Tagged the most idle players' },
 };
 
 function assignAwards(playerList, room) {
   const assigned = new Set();
+  const awards = {};
 
   const maxBy = (key) => {
     let best = null, bestVal = -1;
     playerList.forEach(p => {
-      if (!assigned.has(p.id) && p[key] > bestVal) {
-        bestVal = p[key];
-        best = p;
-      }
+      if (!assigned.has(p.id) && p[key] > bestVal) { bestVal = p[key]; best = p; }
     });
     return bestVal > 0 ? best : null;
   };
 
-  const awards = {};
-
-  // Escape Artist — never IT (check first, binary)
   playerList.forEach(p => {
     if (!p.wasEverIt && !assigned.has(p.id)) {
       awards[p.id] = AWARDS.escapeArtist;
@@ -192,43 +287,30 @@ function assignAwards(playerList, room) {
     }
   });
 
-  // Sacrificial Lamb — first tagged
   if (room.firstTaggedId && !assigned.has(room.firstTaggedId)) {
     awards[room.firstTaggedId] = AWARDS.sacrificialLamb;
     assigned.add(room.firstTaggedId);
   }
 
-  // Panic Mouse — most distance
   const pm = maxBy('totalDistance');
   if (pm) { awards[pm.id] = AWARDS.panicMouse; assigned.add(pm.id); }
 
-  // Revenge Seeker — most retags
   const rs = maxBy('retags');
   if (rs) { awards[rs.id] = AWARDS.revengeSeeker; assigned.add(rs.id); }
 
-  // Magnet to Danger — most times tagged
   const md = maxBy('timesTagged');
   if (md) { awards[md.id] = AWARDS.magnetToDanger; assigned.add(md.id); }
 
-  // Corner Rat — most corner time
   const cr = maxBy('cornerTime');
   if (cr) { awards[cr.id] = AWARDS.cornerRat; assigned.add(cr.id); }
 
-  // Opportunist — most opportunist tags
   const op = maxBy('opportunistTags');
   if (op) { awards[op.id] = AWARDS.opportunist; assigned.add(op.id); }
 
-  // Anchored to Walls — most edge time (anyone remaining)
   const aw = maxBy('edgeTime');
   if (aw) { awards[aw.id] = AWARDS.anchoredToWalls; assigned.add(aw.id); }
 
-  // Anyone without an award gets the most fitting remaining
-  playerList.forEach(p => {
-    if (!awards[p.id]) {
-      awards[p.id] = AWARDS.panicMouse; // fallback
-    }
-  });
-
+  playerList.forEach(p => { if (!awards[p.id]) awards[p.id] = AWARDS.panicMouse; });
   return awards;
 }
 
@@ -237,10 +319,7 @@ function startCountdown(roomCode) {
   const room = rooms.get(roomCode);
   if (!room || room.players.size < 2) return;
   room.state = 'countdown';
-
-  // Start tracking from countdown
   room.players.forEach(p => { p.trackingActive = true; });
-
   broadcastToRoom(room, { type: 'countdown', count: COUNTDOWN_SECONDS });
 
   let count = COUNTDOWN_SECONDS;
@@ -292,36 +371,28 @@ function gameTick(roomCode) {
 
   const playerList = Array.from(room.players.values());
 
+  // Update bots first
+  playerList.forEach(p => { if (p.isBot) updateBot(p, room, dt); });
+
   playerList.forEach(p => {
     if (!p.isIt) p.timeNotIt += dt;
     if (p.immune && now >= p.immuneUntil) p.immune = false;
 
-    // Track movement distance
     if (p.trackingActive) {
-      const dx = p.x - p.prevX;
-      const dy = p.y - p.prevY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      p.totalDistance += dist;
-      p.prevX = p.x;
-      p.prevY = p.y;
-
-      // Corner time: within 10% of any corner
-      const inCorner = (p.x < 10 || p.x > 90) && (p.y < 10 || p.y > 90);
-      if (inCorner) p.cornerTime += dt;
-
-      // Edge time: within 8% of any wall
-      const onEdge = p.x < 8 || p.x > 92 || p.y < 8 || p.y > 92;
-      if (onEdge) p.edgeTime += dt;
+      const dx = p.x - p.prevX, dy = p.y - p.prevY;
+      p.totalDistance += Math.sqrt(dx * dx + dy * dy);
+      p.prevX = p.x; p.prevY = p.y;
+      if ((p.x < 10 || p.x > 90) && (p.y < 10 || p.y > 90)) p.cornerTime += dt;
+      if (p.x < 8 || p.x > 92 || p.y < 8 || p.y > 92) p.edgeTime += dt;
     }
   });
 
-  // Tag collision check
+  // Tag collisions
   const itPlayer = room.players.get(room.itPlayerId);
   if (itPlayer && !itPlayer.immune) {
     for (const p of playerList) {
       if (p.id === itPlayer.id || p.immune) continue;
-      const dx = itPlayer.x - p.x;
-      const dy = itPlayer.y - p.y;
+      const dx = itPlayer.x - p.x, dy = itPlayer.y - p.y;
       if (Math.sqrt(dx * dx + dy * dy) < TAG_DISTANCE_PCT) {
         performTag(room, itPlayer, p, now);
         break;
@@ -339,39 +410,18 @@ function gameTick(roomCode) {
 }
 
 function performTag(room, tagger, target, now) {
-  // Fastest tag stat
   if (tagger.becameItAt) {
     const elapsed = now - tagger.becameItAt;
-    if (tagger.fastestTag === null || elapsed < tagger.fastestTag)
-      tagger.fastestTag = elapsed;
+    if (tagger.fastestTag === null || elapsed < tagger.fastestTag) tagger.fastestTag = elapsed;
     tagger.tagsMade++;
-
-    // IT streak
-    if (tagger.currentItStart) {
-      tagger.itStreaks.push(now - tagger.currentItStart);
-      tagger.currentItStart = null;
-    }
+    if (tagger.currentItStart) { tagger.itStreaks.push(now - tagger.currentItStart); tagger.currentItStart = null; }
   }
 
-  // Opportunist: target hasn't moved much recently
-  const idleThreshold = 0.5;
-  const tdx = target.x - target.prevX;
-  const tdy = target.y - target.prevY;
-  if (Math.sqrt(tdx * tdx + tdy * tdy) < idleThreshold) {
-    tagger.opportunistTags++;
-  }
+  const tdx = target.x - target.prevX, tdy = target.y - target.prevY;
+  if (Math.sqrt(tdx * tdx + tdy * tdy) < 0.5) tagger.opportunistTags++;
+  if (tagger.lastTaggerId === target.id) tagger.retags++;
+  if (!room.firstTaggedId) room.firstTaggedId = target.id;
 
-  // Revengetag: tagger is tagging back the person who last tagged them
-  if (tagger.lastTaggerId === target.id) {
-    tagger.retags++;
-  }
-
-  // First tagged
-  if (!room.firstTaggedId) {
-    room.firstTaggedId = target.id;
-  }
-
-  // Transfer IT
   tagger.isIt = false;
   tagger.immune = true;
   tagger.immuneUntil = now + TAG_IMMUNITY_MS;
@@ -398,40 +448,26 @@ function endGame(roomCode) {
   const playerList = Array.from(room.players.values());
   const now = Date.now();
 
-  // Close any open IT streak
   playerList.forEach(p => {
-    if (p.isIt && p.currentItStart) {
-      p.itStreaks.push(now - p.currentItStart);
-    }
+    if (p.isIt && p.currentItStart) p.itStreaks.push(now - p.currentItStart);
   });
 
-  // Bonus calculations
   const maxDistance = Math.max(...playerList.map(p => p.totalDistance));
   const maxRetags = Math.max(...playerList.map(p => p.retags));
-  const minItStreak = Math.min(...playerList.filter(p => p.itStreaks.length > 0).map(p => Math.min(...p.itStreaks)));
+  const itPlayers = playerList.filter(p => p.itStreaks.length > 0);
+  const minItStreak = itPlayers.length > 0
+    ? Math.min(...itPlayers.map(p => Math.min(...p.itStreaks)))
+    : Infinity;
 
-  // Personality awards
   const awards = assignAwards(playerList, room);
 
   const scoredPlayers = playerList.map(p => {
     let score = 0;
-
-    // 10 pts per second not IT (600 max)
     score += Math.floor(p.timeNotIt / 100);
-
-    // Bonus: never IT = +10
     if (!p.wasEverIt) score += 10;
-
-    // Bonus: shortest IT streak = +10 (only one player gets this)
     if (p.itStreaks.length > 0 && Math.min(...p.itStreaks) === minItStreak) score += 10;
-
-    // Bonus: most retags = +10
     if (p.retags > 0 && p.retags === maxRetags) score += 10;
-
-    // Bonus: most frantic = +10
     if (p.totalDistance > 0 && p.totalDistance === maxDistance) score += 10;
-
-    // Penalty: IT at end
     if (p.id === room.itPlayerId) score = Math.max(0, score - 20);
 
     return {
@@ -458,13 +494,11 @@ function endGame(roomCode) {
   scoredPlayers.forEach((p, i) => { p.rank = i + 1; });
 
   updateLeaderboard(scoredPlayers);
-  const leaderboard = loadLeaderboard().slice(0, 10);
-
-  broadcastToRoom(room, { type: 'gameEnded', players: scoredPlayers, leaderboard });
+  broadcastToRoom(room, { type: 'gameEnded', players: scoredPlayers, leaderboard: loadLeaderboard().slice(0, 10) });
   setTimeout(() => rooms.delete(roomCode), 30000);
 }
 
-// ─── HTTP + WebSocket server ──────────────────────────────────────────────────
+// ─── HTTP + WebSocket ─────────────────────────────────────────────────────────
 const httpServer = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('Cursor Tag server is running');
@@ -497,10 +531,7 @@ wss.on('connection', ws => {
 
       case 'joinRoom': {
         const result = joinRoom(ws, msg.roomCode.toUpperCase(), msg.name);
-        if (result.error) {
-          ws.send(JSON.stringify({ type: 'error', message: result.error }));
-          return;
-        }
+        if (result.error) { ws.send(JSON.stringify({ type: 'error', message: result.error })); return; }
         const r = rooms.get(msg.roomCode.toUpperCase());
         ws.send(JSON.stringify({
           type: 'roomJoined', roomCode: msg.roomCode.toUpperCase(),
@@ -510,10 +541,35 @@ wss.on('connection', ws => {
         break;
       }
 
+      case 'addBot': {
+        if (!room || room.state !== 'waiting') return;
+        const firstPlayer = Array.from(room.players.values())[0];
+        if (firstPlayer.id !== playerId) return;
+        const difficulty = ['easy', 'medium', 'hard'].includes(msg.difficulty) ? msg.difficulty : 'medium';
+        const bot = addBot(room, difficulty);
+        if (!bot) { ws.send(JSON.stringify({ type: 'error', message: 'Room is full' })); return; }
+        broadcastToRoom(room, { type: 'playerJoined', players: getPlayers(room) });
+        break;
+      }
+
+      case 'removeBot': {
+        if (!room || room.state !== 'waiting') return;
+        const firstPlayer = Array.from(room.players.values())[0];
+        if (firstPlayer.id !== playerId) return;
+        const bot = room.players.get(msg.botId);
+        if (bot && bot.isBot) {
+          room.usedBotNames.delete(bot.name);
+          room.players.delete(msg.botId);
+          broadcastToRoom(room, { type: 'playerJoined', players: getPlayers(room) });
+        }
+        break;
+      }
+
       case 'startGame': {
         if (!room || (room.state !== 'waiting' && room.state !== 'ended')) return;
         const firstPlayer = Array.from(room.players.values())[0];
         if (firstPlayer.id !== playerId) return;
+        const humanCount = Array.from(room.players.values()).filter(p => !p.isBot).length;
         if (room.players.size < 2) {
           ws.send(JSON.stringify({ type: 'error', message: 'Need at least 2 players to start' }));
           return;
@@ -537,6 +593,7 @@ wss.on('connection', ws => {
             itStreaks: [], currentItStart: null, opportunistTags: 0,
             trackingActive: false, lastMoveTime: null,
             x: 20 + Math.random() * 60, y: 20 + Math.random() * 60,
+            botTickCounter: 0, botWanderAngle: Math.random() * Math.PI * 2,
           });
         });
         broadcastToRoom(room, { type: 'playAgain', players: getPlayers(room) });
@@ -565,7 +622,7 @@ wss.on('connection', ws => {
       const room = rooms.get(roomCode);
       if (room) {
         room.players.delete(playerId);
-        if (room.players.size === 0) {
+        if (room.players.size === 0 || Array.from(room.players.values()).every(p => p.isBot)) {
           clearInterval(room.stateInterval);
           clearTimeout(room.gameTimer);
           rooms.delete(roomCode);
@@ -573,10 +630,8 @@ wss.on('connection', ws => {
           if (room.state === 'playing' && room.itPlayerId === playerId) {
             const remaining = Array.from(room.players.values());
             const newIt = remaining[Math.floor(Math.random() * remaining.length)];
-            newIt.isIt = true;
-            newIt.wasEverIt = true;
-            newIt.becameItAt = Date.now();
-            newIt.currentItStart = Date.now();
+            newIt.isIt = true; newIt.wasEverIt = true;
+            newIt.becameItAt = Date.now(); newIt.currentItStart = Date.now();
             room.itPlayerId = newIt.id;
           }
           broadcastToRoom(room, { type: 'playerLeft', players: getPlayers(room) });
