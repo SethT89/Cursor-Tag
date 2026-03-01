@@ -19,15 +19,15 @@ const PLAYER_COLORS = [
 // ─── Bot personalities ────────────────────────────────────────────────────────
 const BOT_NAMES = [
   'Dizzy', 'Cheddar', 'Glitch', 'Turbo', 'Biscuit', 'Noodle',
-  'Zapper', 'Pudding', 'Chaos', 'Wobble', 'Socks', 'Blip',
-  'Frenzy', 'Mochi', 'Zigzag', 'Crispy', 'Doodle', 'Sparky',
-  'Pickle', 'Waffles', 'Bonkers', 'Fizz', 'Peanut', 'Rascal',
+  'Zapper', 'Shorty', 'Chaos', 'Spooka', 'Socks', 'Blip',
+  'Holly', 'Pumpkin', 'Zigzag', 'Crispy', 'Schleppa', 'Sparky',
+  'Pickle', 'Hissy', 'Bonkers', 'Fizz', 'Peanut', 'Rascal',
 ];
 
 // Difficulty settings
 const DIFFICULTY = {
-  easy:   { speed: 0.6,  accuracy: 0.4, mistakeChance: 0.35, reactionTicks: 8  },
-  medium: { speed: 1.1,  accuracy: 0.7, mistakeChance: 0.15, reactionTicks: 4  },
+  easy:   { speed: 2.7,  accuracy: 0.4, mistakeChance: 0.35, reactionTicks: 8  },
+  medium: { speed: 3.7,  accuracy: 0.7, mistakeChance: 0.15, reactionTicks: 4  },
   hard:   { speed: 4.7,  accuracy: 1, mistakeChance: 0.01, reactionTicks: 1 },
 };
 
