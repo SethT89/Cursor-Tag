@@ -5,7 +5,7 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const PORT = process.env.PORT || 8080;
-const TAG_DISTANCE_PCT = 8;
+const TAG_DISTANCE_PCT = 5;
 const GAME_DURATION_MS = 60000;
 const COUNTDOWN_SECONDS = 3;
 const TAG_IMMUNITY_MS = 3000;
@@ -19,15 +19,15 @@ const PLAYER_COLORS = [
 // ─── Bot personalities ────────────────────────────────────────────────────────
 const BOT_NAMES = [
   'Dizzy', 'Cheddar', 'Glitch', 'Turbo', 'Biscuit', 'Noodle',
-  'Zapper', 'Shorty', 'Chaos', 'Spooka', 'Socks', 'Blip',
-  'Holly', 'Pumpkin', 'Zigzag', 'Crispy', 'Schleppa', 'Sparky',
-  'Pickle', 'Hissy', 'Bonkers', 'Fizz', 'Peanut', 'Rascal',
+  'Zapper', 'Pudding', 'Chaos', 'Wobble', 'Socks', 'Blip',
+  'Frenzy', 'Mochi', 'Zigzag', 'Crispy', 'Doodle', 'Sparky',
+  'Pickle', 'Waffles', 'Bonkers', 'Fizz', 'Peanut', 'Rascal',
 ];
 
 // Difficulty settings
 const DIFFICULTY = {
-  easy:   { speed: 2.7,  accuracy: 0.4, mistakeChance: 0.35, reactionTicks: 8  },
-  medium: { speed: 3.7,  accuracy: 0.7, mistakeChance: 0.15, reactionTicks: 4  },
+  easy:   { speed: 0.6,  accuracy: 0.4, mistakeChance: 0.35, reactionTicks: 8  },
+  medium: { speed: 1.1,  accuracy: 0.7, mistakeChance: 0.15, reactionTicks: 4  },
   hard:   { speed: 4.7,  accuracy: 1, mistakeChance: 0.01, reactionTicks: 1 },
 };
 
@@ -94,10 +94,12 @@ function createRoom(hostWs, hostName) {
   const player = makePlayer(playerId, hostName, PLAYER_COLORS[0], hostWs);
   const room = {
     code: roomCode, state: 'waiting',
+    hostId: playerId,
     players: new Map([[playerId, player]]),
     itPlayerId: null, gameStartTime: null,
     gameTimer: null, stateInterval: null,
     lastTickTime: null, firstTaggedId: null,
+    cleanupTimer: null,
     usedBotNames: new Set(),
   };
   rooms.set(roomCode, room);
@@ -354,7 +356,6 @@ function startGame(roomCode) {
     players: getPlayers(room),
     itPlayerId: itPlayer.id,
     duration: GAME_DURATION_MS,
-    tagDistance: TAG_DISTANCE_PCT,
   });
 
   room.stateInterval = setInterval(() => gameTick(roomCode), 100);
@@ -495,8 +496,9 @@ function endGame(roomCode) {
   scoredPlayers.forEach((p, i) => { p.rank = i + 1; });
 
   updateLeaderboard(scoredPlayers);
-  broadcastToRoom(room, { type: 'gameEnded', players: scoredPlayers, leaderboard: loadLeaderboard().slice(0, 10) });
-  setTimeout(() => rooms.delete(roomCode), 30000);
+  broadcastToRoom(room, { type: 'gameEnded', players: scoredPlayers });
+  // Give players 5 minutes on results screen before cleaning up
+  room.cleanupTimer = setTimeout(() => rooms.delete(roomCode), 5 * 60 * 1000);
 }
 
 // ─── HTTP + WebSocket ─────────────────────────────────────────────────────────
@@ -544,8 +546,7 @@ wss.on('connection', ws => {
 
       case 'addBot': {
         if (!room || room.state !== 'waiting') return;
-        const firstPlayer = Array.from(room.players.values())[0];
-        if (firstPlayer.id !== playerId) return;
+        if (room.hostId !== playerId) return;
         const difficulty = ['easy', 'medium', 'hard'].includes(msg.difficulty) ? msg.difficulty : 'medium';
         const bot = addBot(room, difficulty);
         if (!bot) { ws.send(JSON.stringify({ type: 'error', message: 'Room is full' })); return; }
@@ -555,8 +556,7 @@ wss.on('connection', ws => {
 
       case 'removeBot': {
         if (!room || room.state !== 'waiting') return;
-        const firstPlayer = Array.from(room.players.values())[0];
-        if (firstPlayer.id !== playerId) return;
+        if (room.hostId !== playerId) return;
         const bot = room.players.get(msg.botId);
         if (bot && bot.isBot) {
           room.usedBotNames.delete(bot.name);
@@ -568,8 +568,7 @@ wss.on('connection', ws => {
 
       case 'startGame': {
         if (!room || (room.state !== 'waiting' && room.state !== 'ended')) return;
-        const firstPlayer = Array.from(room.players.values())[0];
-        if (firstPlayer.id !== playerId) return;
+        if (room.hostId !== playerId) return;
         const humanCount = Array.from(room.players.values()).filter(p => !p.isBot).length;
         if (room.players.size < 2) {
           ws.send(JSON.stringify({ type: 'error', message: 'Need at least 2 players to start' }));
@@ -581,6 +580,8 @@ wss.on('connection', ws => {
 
       case 'playAgain': {
         if (!room || room.state !== 'ended') return;
+        // Cancel the room cleanup timer so the room isn't deleted mid-lobby
+        if (room.cleanupTimer) { clearTimeout(room.cleanupTimer); room.cleanupTimer = null; }
         room.state = 'waiting';
         room.itPlayerId = null;
         room.firstTaggedId = null;
