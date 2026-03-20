@@ -14,7 +14,7 @@ const TAG_IMMUNITY_MS = 3000;
 const MAX_PLAYERS_CLASSIC = 8;
 const MAX_PLAYERS_ZOMBIE = 12;
 const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
-const ZOMBIE_SPEED_FACTOR = 0.7;
+const ZOMBIE_SPEED_FACTOR = 0.78;
 const TURNING_SPEED_FACTOR = 0.4;
 
 const PLAYER_COLORS = [
@@ -71,8 +71,9 @@ function makePlayer(id, name, color, ws, isBot=false, difficulty=null) {
     eliminationRank:null, isPatientZero:false,
     botTargetX:50, botTargetY:50, botTickCounter:0,
     botWanderAngle: Math.random()*Math.PI*2,
-    // velocity tracking for AI
+    // velocity tracking for AI (smoothed rolling average)
     vx:0, vy:0,
+    posHistory: [],  // last 5 positions for smoothed velocity
   };
 }
 
@@ -88,7 +89,7 @@ function resetPlayer(p) {
     eliminationRank:null, isPatientZero:false,
     x:20+Math.random()*60, y:20+Math.random()*60,
     botTickCounter:0, botWanderAngle:Math.random()*Math.PI*2,
-    vx:0, vy:0,
+    vx:0, vy:0, posHistory:[],
   });
 }
 
@@ -251,16 +252,20 @@ function updateClassicBot(bot, room, dt) {
 // Multiple zombies each pick a DIFFERENT primary target human so pressure
 // spreads across the whole group rather than everyone dogpiling one.
 
+// Role assignment — called every 20 ticks to let zombies commit to a strategy
 function assignZombieRoles(botZombies, allHumans) {
-  // Returns array of { bot, role, target } in same order as botZombies
   if(allHumans.length===0) return botZombies.map(b=>({bot:b,role:'chaser',target:null}));
   const n = botZombies.length;
 
-  // Give each zombie a different primary human target (round-robin by distance)
-  const assignments = botZombies.map((bot, idx) => {
-    // Sort humans by distance from this bot, offset by idx to spread coverage
-    const sorted = [...allHumans].sort((a,b)=>dist2(a.x,a.y,bot.x,bot.y)-dist2(b.x,b.y,bot.x,bot.y));
-    const target = sorted[idx % sorted.length];
+  // Each zombie targets a different human to maximise spread pressure
+  // Sort bots by x position so role assignment is spatially consistent
+  const sorted = [...botZombies].sort((a,b)=>a.x-b.x);
+
+  return sorted.map((bot, idx) => {
+    // Assign primary target: each zombie picks the human it's currently closest to,
+    // but offset the sort index so they don't all pick the same one
+    const humansSorted = [...allHumans].sort((a,b)=>dist2(a.x,a.y,bot.x,bot.y)-dist2(b.x,b.y,bot.x,bot.y));
+    const target = humansSorted[idx % humansSorted.length];
 
     let role = 'chaser';
     if(n >= 2 && idx === 1) role = 'interceptor';
@@ -269,12 +274,28 @@ function assignZombieRoles(botZombies, allHumans) {
 
     return { bot, role, target };
   });
-
-  return assignments;
 }
 
-// Room-level zombie role cache — recompute every 5 ticks
-const zombieRoleCache = new Map(); // roomCode -> { tick, assignments }
+// Room-level zombie role cache — recompute every 20 ticks so zombies commit
+const zombieRoleCache = new Map(); // roomCode -> { assignments }
+
+// Apply inter-zombie repulsion: push zombies apart if they're too close
+// This is the main fix for convergence — called after target is set
+function applyZombieRepulsion(bot, botZombies) {
+  const MIN_SPREAD = 22; // minimum distance zombies should maintain
+  botZombies.forEach(other => {
+    if(other.id === bot.id) return;
+    const dx = bot.botTargetX - other.x;
+    const dy = bot.botTargetY - other.y;
+    const d = Math.sqrt(dx*dx + dy*dy);
+    if(d < MIN_SPREAD && d > 0.1){
+      // Push our target away from the other zombie
+      const push = (MIN_SPREAD - d) / MIN_SPREAD;
+      bot.botTargetX += (dx/d) * push * 15;
+      bot.botTargetY += (dy/d) * push * 15;
+    }
+  });
+}
 
 function updateZombieBot(bot, room, dt, allZombies, allHumans, roomCode) {
   if(!bot.isBot||!bot.trackingActive)return;
@@ -310,21 +331,19 @@ function updateZombieBot(bot, room, dt, allZombies, allHumans, roomCode) {
   }
 
   // ── Turning — barely moves ─────────────────────────────────────────────────
-  if(bot.isTurning){
-    moveTo(bot, spd, dt);
-    return;
-  }
+  if(bot.isTurning){ moveTo(bot, spd, dt); return; }
 
-  // ── Active zombie — smart role-based movement ──────────────────────────────
+  // ── Active zombie — role-based movement with repulsion ────────────────────
   if(allHumans.length===0){ moveTo(bot,spd,dt); return; }
 
-  // Rebuild role cache every 5 ticks
   const botZombies = allZombies.filter(z=>z.isZombie&&!z.isTurning&&z.isBot);
-  const cache = zombieRoleCache.get(roomCode) || { tick:0, assignments:[] };
+
+  // Rebuild role cache every 20 ticks — commit to strategy
+  const cache = zombieRoleCache.get(roomCode) || { assignments:[] };
   let assignments = cache.assignments;
-  if(bot.botTickCounter % 5 === 0 || assignments.length !== botZombies.length){
+  if(bot.botTickCounter % 20 === 0 || assignments.length !== botZombies.length){
     assignments = assignZombieRoles(botZombies, allHumans);
-    zombieRoleCache.set(roomCode, { tick:bot.botTickCounter, assignments });
+    zombieRoleCache.set(roomCode, { assignments });
   }
 
   const myAssign = assignments.find(a=>a.bot.id===bot.id);
@@ -333,65 +352,66 @@ function updateZombieBot(bot, room, dt, allZombies, allHumans, roomCode) {
 
   if(!target){ moveTo(bot,spd,dt); return; }
 
-  const noise = (1-diff.accuracy)*12;
+  const noise = (1-diff.accuracy)*10;
 
   switch(role){
     case 'chaser': {
-      // Direct pursuit — aim straight at target with small noise
+      // Direct pursuit — no prediction, just relentless
       bot.botTargetX = target.x + (Math.random()-.5)*noise;
       bot.botTargetY = target.y + (Math.random()-.5)*noise;
       break;
     }
     case 'interceptor': {
-      // Predict where target will be ~15 ticks ahead
-      const lookAhead = Math.max(5, Math.round(15 * (1 - (1-diff.accuracy)*0.5)));
+      // Predict where target will be ahead using smoothed velocity
+      const lookAhead = 18;
       const pred = predictPos(target, lookAhead);
       bot.botTargetX = pred.x + (Math.random()-.5)*noise;
       bot.botTargetY = pred.y + (Math.random()-.5)*noise;
       break;
     }
     case 'flanker': {
-      // Approach from perpendicular to target's movement direction
-      const speed = Math.sqrt(target.vx**2 + target.vy**2);
-      if(speed > 0.05){
-        // Rotate velocity 90° to get flank direction
-        const perpX = -target.vy / speed;
-        const perpY =  target.vx / speed;
-        // Pick the side that puts us closer to target
-        const sideA = { x: target.x + perpX*20, y: target.y + perpY*20 };
-        const sideB = { x: target.x - perpX*20, y: target.y - perpY*20 };
-        const dA = dist2(bot.x, bot.y, sideA.x, sideA.y);
-        const dB = dist2(bot.x, bot.y, sideB.x, sideB.y);
-        const side = dA < dB ? sideA : sideB;
+      // Come from the side perpendicular to target's movement
+      const spd2 = Math.sqrt(target.vx**2 + target.vy**2);
+      if(spd2 > 0.1){
+        const perpX = -target.vy / spd2;
+        const perpY =  target.vx / spd2;
+        const sideA = { x: target.x + perpX*25, y: target.y + perpY*25 };
+        const sideB = { x: target.x - perpX*25, y: target.y - perpY*25 };
+        const side = dist2(bot.x,bot.y,sideA.x,sideA.y) < dist2(bot.x,bot.y,sideB.x,sideB.y) ? sideA : sideB;
         bot.botTargetX = side.x + (Math.random()-.5)*noise;
         bot.botTargetY = side.y + (Math.random()-.5)*noise;
       } else {
-        // Target is stationary — just chase
         bot.botTargetX = target.x + (Math.random()-.5)*noise;
         bot.botTargetY = target.y + (Math.random()-.5)*noise;
       }
       break;
     }
     case 'herder': {
-      // Move to block the human's best escape route (opposite wall from zombie cluster)
-      const otherZombies = botZombies.filter(z=>z.id!==bot.id);
-      // Find the "safe" side — where zombies aren't — and go there to cut it off
-      let avgZX=bot.x, avgZY=bot.y;
-      if(otherZombies.length>0){
-        avgZX = otherZombies.reduce((s,z)=>s+z.x,0)/otherZombies.length;
-        avgZY = otherZombies.reduce((s,z)=>s+z.y,0)/otherZombies.length;
-      }
-      // The escape vector for human is away from zombie centroid
-      const dx = target.x - avgZX, dy = target.y - avgZY;
-      const d = Math.max(0.1, Math.sqrt(dx*dx+dy*dy));
-      // Go 30 units ahead of the human along their escape vector to cut them off
-      const cutX = target.x + (dx/d)*30;
-      const cutY = target.y + (dy/d)*30;
-      bot.botTargetX = Math.max(5,Math.min(95,cutX)) + (Math.random()-.5)*noise;
-      bot.botTargetY = Math.max(5,Math.min(95,cutY)) + (Math.random()-.5)*noise;
+      // Rush to the nearest wall/corner on the far side of the human
+      // — cuts off the escape route rather than following from behind
+      const wallCandidates = [
+        { x: target.x > 50 ? 95 : 5,  y: target.y },   // nearest side wall
+        { x: target.x,                  y: target.y > 50 ? 95 : 5 }, // nearest top/bottom wall
+        { x: target.x > 50 ? 95 : 5,  y: target.y > 50 ? 95 : 5 }, // nearest corner
+      ];
+      // Pick the wall point that this bot can reach before the human can change direction
+      let best = wallCandidates[0];
+      let bestScore = Infinity;
+      wallCandidates.forEach(w => {
+        const myDist  = dist2(bot.x, bot.y, w.x, w.y);
+        const humDist = dist2(target.x, target.y, w.x, w.y);
+        // Prefer walls where we're closer (or close to as fast) as the human
+        const score = myDist - humDist * 0.6;
+        if(score < bestScore){ bestScore = score; best = w; }
+      });
+      bot.botTargetX = best.x + (Math.random()-.5)*noise;
+      bot.botTargetY = best.y + (Math.random()-.5)*noise;
       break;
     }
   }
+
+  // Apply inter-zombie repulsion — physically push zombies apart
+  applyZombieRepulsion(bot, botZombies);
 
   // Random mistake (difficulty-scaled)
   if(Math.random() < diff.mistakeChance){
@@ -580,10 +600,20 @@ function zombieTick(roomCode){
   const timeLeft=Math.max(0,ZOMBIE_GAME_DURATION_MS-(now-room.gameStartTime));
   const list=Array.from(room.players.values());
 
-  // Update velocity tracking on all players (for AI prediction)
+  // Update smoothed velocity on all players (rolling avg of last 5 ticks)
   list.forEach(p=>{
-    p.vx = (p.x - (p.prevX||p.x));
-    p.vy = (p.y - (p.prevY||p.y));
+    if(!p.posHistory) p.posHistory = [];
+    p.posHistory.push({ x: p.x, y: p.y });
+    if(p.posHistory.length > 5) p.posHistory.shift();
+    if(p.posHistory.length >= 2){
+      const oldest = p.posHistory[0];
+      const newest = p.posHistory[p.posHistory.length - 1];
+      const span = p.posHistory.length - 1;
+      p.vx = (newest.x - oldest.x) / span;
+      p.vy = (newest.y - oldest.y) / span;
+    } else {
+      p.vx = 0; p.vy = 0;
+    }
   });
 
   const allZombies=list.filter(p=>p.isZombie||p.isTurning);
