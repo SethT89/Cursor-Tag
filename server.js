@@ -7,7 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 const PORT = process.env.PORT || 8080;
 const TAG_DISTANCE_PCT = 8;
 const GAME_DURATION_MS = 60000;
-const ZOMBIE_GAME_DURATION_MS = 3 * 60 * 1000;
+const ZOMBIE_GAME_DURATION_MS = 60 * 1000;
 const ZOMBIE_TURNING_MS = 3000;
 const COUNTDOWN_SECONDS = 3;
 const TAG_IMMUNITY_MS = 3000;
@@ -668,20 +668,28 @@ function endZombieGame(roomCode,reason){
   const gameDuration=now-room.gameStartTime;
   const awards=assignZombieAwards(list);
   const totalOthers = Math.max(1, list.length - 1);
-  const maxGameSec = ZOMBIE_GAME_DURATION_MS / 1000;
+  const maxGameSec = ZOMBIE_GAME_DURATION_MS / 1000; // 60s
   const scored=list.map(p=>{
     let score=0;
     if(!p.isZombie&&!p.isTurning){
-      // Survivors: 0–1000 based on how long they lasted (full game = 1000)
+      // Survivors: 0–1000 scaled to survival time. Full 60s = 1000.
       const survived = gameDuration / 1000;
       score = Math.round((survived / maxGameSec) * 1000);
     } else if(p.isPatientZero){
-      // Patient Zero: 0–999 based on infection rate (infecting everyone = 999)
-      score = Math.round((p.infectCount / totalOthers) * 999);
+      // Patient Zero: up to 999 for infecting everyone.
+      // Bonus: extra points for infecting fast (within first 30s = up to +150)
+      const infectionRate = p.infectCount / totalOthers;
+      const avgInfectTime = p.infectCount > 0
+        ? (room.eliminationOrder.slice(0, p.infectCount).reduce((s,e)=>(s + (e.time - room.gameStartTime)),0) / p.infectCount / 1000)
+        : maxGameSec;
+      const speedBonus = Math.round(Math.max(0, (1 - avgInfectTime / (maxGameSec * 0.5))) * 150);
+      score = Math.min(999, Math.round(infectionRate * 849) + speedBonus);
     } else {
-      // Other zombies: 0–600 based on how long they survived before turning
+      // Infected humans: 0–600 for survival time + 50 per infection caused
       const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
-      score = Math.round((survivalSec / maxGameSec) * 600);
+      const survivalScore = Math.round((survivalSec / maxGameSec) * 500);
+      const infectBonus = (p.infectCount || 0) * 50;
+      score = Math.min(600, survivalScore + infectBonus);
     }
     return{...serializePlayer(p),score,isLoser:false,award:awards[p.id]||null,
       isSurvivor:!p.isZombie&&!p.isTurning,
