@@ -637,15 +637,21 @@ function endZombieGame(roomCode,reason){
   const list=Array.from(room.players.values()),now=Date.now();
   const gameDuration=now-room.gameStartTime;
   const awards=assignZombieAwards(list);
+  const totalOthers = Math.max(1, list.length - 1);
+  const maxGameSec = ZOMBIE_GAME_DURATION_MS / 1000;
   const scored=list.map(p=>{
     let score=0;
-    if(!p.isZombie&&!p.isTurning){score=Math.round(gameDuration/1000)+100;}
-    else if(p.isPatientZero){
-      const maxT=ZOMBIE_GAME_DURATION_MS/1000,used=gameDuration/1000;
-      score=p.infectCount*20+Math.max(0,Math.round((1-used/maxT)*100));
+    if(!p.isZombie&&!p.isTurning){
+      // Survivors: 0–1000 based on how long they lasted (full game = 1000)
+      const survived = gameDuration / 1000;
+      score = Math.round((survived / maxGameSec) * 1000);
+    } else if(p.isPatientZero){
+      // Patient Zero: 0–999 based on infection rate (infecting everyone = 999)
+      score = Math.round((p.infectCount / totalOthers) * 999);
     } else {
-      const st=p.infectedAt?Math.round((p.infectedAt-room.gameStartTime)/1000):0;
-      score=p.infectCount*15+st;
+      // Other zombies: 0–600 based on how long they survived before turning
+      const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
+      score = Math.round((survivalSec / maxGameSec) * 600);
     }
     return{...serializePlayer(p),score,isLoser:false,award:awards[p.id]||null,
       isSurvivor:!p.isZombie&&!p.isTurning,
