@@ -173,7 +173,11 @@ function getLiveScores(room) {
         score = 601 + Math.round((survived / maxGameSec) * 399);
       } else if (p.isPatientZero) {
         const infectionRate = p.infectCount / totalOthers;
-        score = Math.min(600, Math.round(infectionRate * 500));
+        const avgInfectTime = p.infectCount > 0
+          ? (room.eliminationOrder.slice(0, p.infectCount).reduce((s,e)=>(s + (e.time - room.gameStartTime)),0) / p.infectCount / 1000)
+          : maxGameSec;
+        const speedBonus = Math.round(Math.max(0, (1 - avgInfectTime / (maxGameSec * 0.5))) * 100);
+        score = Math.min(600, Math.round(infectionRate * 500) + speedBonus);
       } else {
         const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
         score = Math.min(500, Math.round((survivalSec / maxGameSec) * 420) + (p.infectCount || 0) * 40);
