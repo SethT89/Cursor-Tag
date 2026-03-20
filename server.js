@@ -14,7 +14,7 @@ const TAG_IMMUNITY_MS = 3000;
 const MAX_PLAYERS_CLASSIC = 8;
 const MAX_PLAYERS_ZOMBIE = 12;
 const LEADERBOARD_FILE = path.join(__dirname, 'leaderboard.json');
-const ZOMBIE_SPEED_FACTOR = 0.78;
+const ZOMBIE_SPEED_FACTOR = 0.7;
 const TURNING_SPEED_FACTOR = 0.4;
 
 const PLAYER_COLORS = [
