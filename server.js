@@ -99,6 +99,7 @@ function createRoom(hostWs, hostName) {
   const player = makePlayer(playerId, hostName, PLAYER_COLORS[0], hostWs);
   const room = {
     code:roomCode, state:'waiting', mode:'classic', hostId:playerId,
+    isPublic: false,
     players: new Map([[playerId, player]]),
     itPlayerId:null, gameStartTime:null, gameTimer:null,
     stateInterval:null, lastTickTime:null, firstTaggedId:null,
@@ -740,7 +741,7 @@ wss.on('connection',ws=>{
     switch(msg.type){
       case 'createRoom':{
         const{roomCode:rc,playerId:pid,player:p}=createRoom(ws,msg.name);
-        ws.send(JSON.stringify({type:'roomCreated',roomCode:rc,playerId:pid,players:[serializePlayer(p)],color:p.color,mode:'classic'}));
+        ws.send(JSON.stringify({type:'roomCreated',roomCode:rc,playerId:pid,players:[serializePlayer(p)],color:p.color,mode:'classic',isPublic:false}));
         break;
       }
       case 'joinRoom':{
@@ -757,6 +758,36 @@ wss.on('connection',ws=>{
           room.mode=msg.mode;
           broadcastToRoom(room,{type:'modeChanged',mode:room.mode,players:getPlayers(room)});
         }
+        break;
+      }
+      case 'setVisibility':{
+        if(!room||room.state!=='waiting'||room.hostId!==playerId)return;
+        room.isPublic = !!msg.isPublic;
+        broadcastToRoom(room,{type:'visibilityChanged',isPublic:room.isPublic});
+        ws.send(JSON.stringify({type:'visibilityChanged',isPublic:room.isPublic}));
+        break;
+      }
+      case 'browseRooms':{
+        const publicRooms=[];
+        rooms.forEach((r,code)=>{
+          if(!r.isPublic||r.state!=='waiting')return;
+          const max=r.mode==='zombie'?MAX_PLAYERS_ZOMBIE:MAX_PLAYERS_CLASSIC;
+          const humanCount=Array.from(r.players.values()).filter(p=>!p.isBot).length;
+          const botCount=Array.from(r.players.values()).filter(p=>p.isBot).length;
+          if(humanCount>=max)return;
+          const host=r.players.get(r.hostId);
+          publicRooms.push({
+            code,
+            hostName: host?host.name:'Unknown',
+            mode: r.mode,
+            playerCount: r.players.size,
+            humanCount,
+            botCount,
+            maxPlayers: max,
+            openSlots: max - r.players.size,
+          });
+        });
+        ws.send(JSON.stringify({type:'roomList',rooms:publicRooms}));
         break;
       }
       case 'addBot':{
