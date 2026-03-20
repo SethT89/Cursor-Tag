@@ -161,12 +161,25 @@ function getPlayers(room) { return Array.from(room.players.values()).map(seriali
 function getLiveScores(room) {
   const players = Array.from(room.players.values());
   if (room.mode==='zombie') {
-    const now = Date.now(), start = room.gameStartTime||now;
-    const humans = players.filter(p=>!p.isZombie&&!p.isTurning)
-      .map(p=>({id:p.id,name:p.name,color:p.color,score:Math.round((now-start)/1000),isIt:false,isBot:p.isBot,isZombie:false,isTurning:false}));
-    const zombies = players.filter(p=>p.isZombie||p.isTurning)
-      .map(p=>({id:p.id,name:p.name,color:p.color,score:p.infectCount,isIt:false,isBot:p.isBot,isZombie:true,isTurning:p.isTurning}));
-    return [...humans,...zombies];
+    const now = Date.now();
+    const maxGameSec = ZOMBIE_GAME_DURATION_MS / 1000;
+    const totalOthers = Math.max(1, players.length - 1);
+    const gameDuration = now - (room.gameStartTime || now);
+
+    return players.map(p => {
+      let score = 0;
+      if (!p.isZombie && !p.isTurning) {
+        const survived = gameDuration / 1000;
+        score = 601 + Math.round((survived / maxGameSec) * 399);
+      } else if (p.isPatientZero) {
+        const infectionRate = p.infectCount / totalOthers;
+        score = Math.min(600, Math.round(infectionRate * 500));
+      } else {
+        const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
+        score = Math.min(500, Math.round((survivalSec / maxGameSec) * 420) + (p.infectCount || 0) * 40);
+      }
+      return { id:p.id, name:p.name, color:p.color, score, isIt:false, isBot:p.isBot, isZombie:p.isZombie||p.isTurning, isTurning:p.isTurning };
+    }).sort((a,b) => b.score - a.score);
   }
   return players.map(p=>({id:p.id,name:p.name,color:p.color,score:Math.floor(p.timeNotIt/100),isIt:p.isIt,isBot:p.isBot,isZombie:false,isTurning:false}))
     .sort((a,b)=>b.score-a.score);
