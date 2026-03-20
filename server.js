@@ -442,6 +442,7 @@ const ZOMBIE_AWARDS = {
   patientZero:{emoji:'🧟',title:'Patient Zero',desc:'Started the outbreak'},
   earlyVictim:{emoji:'😵',title:'Early Victim',desc:'First human infected'},
   herdImmunity:{emoji:'🛡️',title:'Herd Immunity',desc:'Survived to the time limit'},
+  turnedZombie:{emoji:'🩸',title:'Turned',desc:'Joined the horde'},
 };
 
 function assignAwards(list,room){
@@ -475,7 +476,9 @@ function assignZombieAwards(list){
   if(ls&&!awards[ls.id])awards[ls.id]=ZOMBIE_AWARDS.speedRunner;
   list.forEach(p=>{
     if(!awards[p.id]){
-      awards[p.id] = (p.isZombie || p.isTurning) ? ZOMBIE_AWARDS.superSpreader : ZOMBIE_AWARDS.herdImmunity;
+      awards[p.id] = (p.isZombie || p.isTurning)
+        ? ZOMBIE_AWARDS.turnedZombie
+        : ZOMBIE_AWARDS.herdImmunity;
     }
   });
   return awards;
