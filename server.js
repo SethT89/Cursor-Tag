@@ -164,24 +164,20 @@ function getLiveScores(room) {
   if (room.mode==='zombie') {
     const now = Date.now();
     const maxGameSec = ZOMBIE_GAME_DURATION_MS / 1000;
-    const totalOthers = Math.max(1, players.length - 1);
-    const gameDuration = now - (room.gameStartTime || now);
+    const gameDuration = (now - (room.gameStartTime || now)) / 1000;
 
     return players.map(p => {
       let score = 0;
       if (!p.isZombie && !p.isTurning) {
-        const survived = gameDuration / 1000;
-        score = 601 + Math.round((survived / maxGameSec) * 399);
+        // Ticks up 10pts/sec in real time — +200 bonus shown only when full game complete
+        score = Math.round(gameDuration * 10);
       } else if (p.isPatientZero) {
-        const infectionRate = p.infectCount / totalOthers;
-        const avgInfectTime = p.infectCount > 0
-          ? (room.eliminationOrder.slice(0, p.infectCount).reduce((s,e)=>(s + (e.time - room.gameStartTime)),0) / p.infectCount / 1000)
-          : maxGameSec;
-        const speedBonus = Math.round(Math.max(0, (1 - avgInfectTime / (maxGameSec * 0.5))) * 100);
-        score = Math.min(600, Math.round(infectionRate * 500) + speedBonus);
+        // Bleeds down from 600 in real time + infection jumps
+        score = Math.max(0, Math.round(600 - gameDuration * 8) + p.infectCount * 120);
       } else {
+        // Frozen at infection moment + 50 per infection caused
         const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
-        score = Math.min(500, Math.round((survivalSec / maxGameSec) * 420) + (p.infectCount || 0) * 40);
+        score = Math.round(survivalSec * 10) + (p.infectCount || 0) * 50;
       }
       return { id:p.id, name:p.name, color:p.color, score, isIt:false, isBot:p.isBot, isZombie:p.isZombie||p.isTurning, isTurning:p.isTurning };
     }).sort((a,b) => b.score - a.score);
@@ -691,29 +687,24 @@ function endZombieGame(roomCode,reason){
   zombieRoleCache.delete(roomCode);
   const list=Array.from(room.players.values()),now=Date.now();
   const gameDuration=now-room.gameStartTime;
+  const maxGameSec = ZOMBIE_GAME_DURATION_MS / 1000;
   const awards=assignZombieAwards(list);
-  const totalOthers = Math.max(1, list.length - 1);
-  const maxGameSec = ZOMBIE_GAME_DURATION_MS / 1000; // 60s
   const scored=list.map(p=>{
     let score=0;
     if(!p.isZombie&&!p.isTurning){
-      // Survivors: 601–1000 scaled to survival time. Always beat Patient Zero.
+      // Survivor: 10pts/sec survived + 200 bonus for lasting the full game
       const survived = gameDuration / 1000;
-      score = 601 + Math.round((survived / maxGameSec) * 399);
+      score = Math.round(survived * 10);
+      if(survived >= maxGameSec - 1) score += 200; // full game bonus
     } else if(p.isPatientZero){
-      // Patient Zero: 0–600. Infecting everyone fast = 600. Can't beat a survivor.
-      const infectionRate = p.infectCount / totalOthers;
-      const avgInfectTime = p.infectCount > 0
-        ? (room.eliminationOrder.slice(0, p.infectCount).reduce((s,e)=>(s + (e.time - room.gameStartTime)),0) / p.infectCount / 1000)
-        : maxGameSec;
-      const speedBonus = Math.round(Math.max(0, (1 - avgInfectTime / (maxGameSec * 0.5))) * 100);
-      score = Math.min(600, Math.round(infectionRate * 500) + speedBonus);
+      // Patient Zero: starts at 600, bleeds 8pts/sec, +120 per infection
+      // Infect fast and often to win — do nothing and you end up low
+      const elapsed = gameDuration / 1000;
+      score = Math.max(0, Math.round(600 - elapsed * 8) + p.infectCount * 120);
     } else {
-      // Infected humans: 0–500. Survival time + 40pts per infection caused.
+      // Infected: score freezes at infection moment (survivalSecs × 10) + 50 per infection caused
       const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
-      const survivalScore = Math.round((survivalSec / maxGameSec) * 420);
-      const infectBonus = (p.infectCount || 0) * 40;
-      score = Math.min(500, survivalScore + infectBonus);
+      score = Math.round(survivalSec * 10) + (p.infectCount || 0) * 50;
     }
     return{...serializePlayer(p),score,isLoser:false,award:awards[p.id]||null,
       isSurvivor:!p.isZombie&&!p.isTurning,
