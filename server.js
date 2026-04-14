@@ -31,9 +31,9 @@ const BOT_NAMES = [
 ];
 
 const DIFFICULTY = {
-  easy:   { speed: 0.6,  accuracy: 0.4,  mistakeChance: 0.35, reactionTicks: 8 },
-  medium: { speed: 1.1,  accuracy: 0.7,  mistakeChance: 0.15, reactionTicks: 4 },
-  hard:   { speed: 4.7,  accuracy: 1.0,  mistakeChance: 0.01, reactionTicks: 1 },
+  easy:   { speed: 1.2,  accuracy: 0.4,  mistakeChance: 0.25, reactionTicks: 8 },
+  medium: { speed: 2.5,  accuracy: 0.7,  mistakeChance: 0.12, reactionTicks: 4 },
+  hard:   { speed: 6.5,  accuracy: 1.0,  mistakeChance: 0.01, reactionTicks: 1 },
 };
 
 // ─── Leaderboard ──────────────────────────────────────────────────────────────
@@ -227,21 +227,59 @@ function updateClassicBot(bot, room, dt) {
   if(bot.botTickCounter%diff.reactionTicks===0){
     const list=Array.from(room.players.values());
     if(bot.isIt){
+      // Chase nearest non-immune player
       let nearest=null,nd=Infinity;
       list.forEach(p=>{if(p.id===bot.id||p.immune)return;const d=dist2(p.x,p.y,bot.x,bot.y);if(d<nd){nd=d;nearest=p;}});
-      if(nearest){const n=(1-diff.accuracy)*20;bot.botTargetX=nearest.x+(Math.random()-.5)*n;bot.botTargetY=nearest.y+(Math.random()-.5)*n;}
+      if(nearest){
+        // Intercept based on accuracy — hard bots lead their target
+        if(diff.accuracy > 0.8 && nearest.vx !== undefined){
+          bot.botTargetX = nearest.x + (nearest.vx||0) * 8;
+          bot.botTargetY = nearest.y + (nearest.vy||0) * 8;
+        } else {
+          const n=(1-diff.accuracy)*20;
+          bot.botTargetX=nearest.x+(Math.random()-.5)*n;
+          bot.botTargetY=nearest.y+(Math.random()-.5)*n;
+        }
+      }
     } else {
       const it=room.players.get(room.itPlayerId);
       if(it&&it.id!==bot.id){
-        const dx=bot.x-it.x,dy=bot.y-it.y,d=dist2(bot.x,bot.y,it.x,it.y);
-        if(d<30){
-          const n=(1-diff.accuracy)*10;
-          bot.botTargetX=Math.max(15,Math.min(85,bot.x+(dx/d)*25))+(Math.random()-.5)*n;
-          bot.botTargetY=Math.max(15,Math.min(85,bot.y+(dy/d)*25))+(Math.random()-.5)*n;
+        const dx=bot.x-it.x, dy=bot.y-it.y;
+        const d=Math.sqrt(dx*dx+dy*dy);
+        if(d < 60){
+          // FLEE — aim for the corner furthest from IT
+          const corners = [
+            {x:10,y:10},{x:90,y:10},{x:10,y:90},{x:90,y:90}
+          ];
+          let bestCorner = corners[0];
+          let bestDist = -1;
+          corners.forEach(c => {
+            const cd = dist2(c.x, c.y, it.x, it.y);
+            if(cd > bestDist){ bestDist = cd; bestCorner = c; }
+          });
+          // Add juke — occasionally dart sideways before fleeing
+          const juke = Math.random() < 0.2;
+          if(juke){
+            const perpX = -dy/Math.max(0.1,d);
+            const perpY =  dx/Math.max(0.1,d);
+            const side = Math.random() < 0.5 ? 1 : -1;
+            bot.botTargetX = bot.x + perpX * side * 20;
+            bot.botTargetY = bot.y + perpY * side * 20;
+          } else {
+            const n=(1-diff.accuracy)*8;
+            bot.botTargetX = bestCorner.x + (Math.random()-.5)*n;
+            bot.botTargetY = bestCorner.y + (Math.random()-.5)*n;
+          }
+          // Wall avoidance — don't trap in corners if IT is already there
+          if(bot.x < 15) bot.botTargetX = Math.max(bot.botTargetX, 30);
+          if(bot.x > 85) bot.botTargetX = Math.min(bot.botTargetX, 70);
+          if(bot.y < 15) bot.botTargetY = Math.max(bot.botTargetY, 30);
+          if(bot.y > 85) bot.botTargetY = Math.min(bot.botTargetY, 70);
         } else {
-          bot.botWanderAngle+=(Math.random()-.5)*0.5;
-          bot.botTargetX=bot.x+Math.cos(bot.botWanderAngle)*8;
-          bot.botTargetY=bot.y+Math.sin(bot.botWanderAngle)*8;
+          // Wander naturally — more erratic than before
+          bot.botWanderAngle += (Math.random()-.5) * 0.8;
+          bot.botTargetX = bot.x + Math.cos(bot.botWanderAngle) * 12;
+          bot.botTargetY = bot.y + Math.sin(bot.botWanderAngle) * 12;
           if(bot.botTargetX<10){bot.botTargetX=15;bot.botWanderAngle=0;}
           if(bot.botTargetX>90){bot.botTargetX=85;bot.botWanderAngle=Math.PI;}
           if(bot.botTargetY<10){bot.botTargetY=15;bot.botWanderAngle=Math.PI/2;}
@@ -329,14 +367,30 @@ function updateZombieBot(bot, room, dt, allZombies, allHumans, roomCode) {
     if(activeZ.length>0){
       let nearest=null, nd=Infinity;
       activeZ.forEach(z=>{const d=dist2(z.x,z.y,bot.x,bot.y);if(d<nd){nd=d;nearest=z;}});
-      if(nearest && nd<50){
+      if(nearest && nd<60){
         const dx=bot.x-nearest.x, dy=bot.y-nearest.y, d=Math.max(0.1,Math.sqrt(dx*dx+dy*dy));
-        bot.botTargetX = Math.max(10, Math.min(90, bot.x + (dx/d)*30));
-        bot.botTargetY = Math.max(10, Math.min(90, bot.y + (dy/d)*30));
+        // Flee to furthest corner from nearest zombie
+        const corners = [{x:10,y:10},{x:90,y:10},{x:10,y:90},{x:90,y:90}];
+        let bestCorner = corners[0], bestDist = -1;
+        corners.forEach(c=>{const cd=dist2(c.x,c.y,nearest.x,nearest.y);if(cd>bestDist){bestDist=cd;bestCorner=c;}});
+        // Juke occasionally
+        if(Math.random() < 0.15){
+          const perpX = -dy/d, perpY = dx/d, side = Math.random()<0.5?1:-1;
+          bot.botTargetX = bot.x + perpX*side*25;
+          bot.botTargetY = bot.y + perpY*side*25;
+        } else {
+          bot.botTargetX = bestCorner.x + (Math.random()-.5)*8;
+          bot.botTargetY = bestCorner.y + (Math.random()-.5)*8;
+        }
+        // Wall avoidance
+        if(bot.x < 15) bot.botTargetX = Math.max(bot.botTargetX, 30);
+        if(bot.x > 85) bot.botTargetX = Math.min(bot.botTargetX, 70);
+        if(bot.y < 15) bot.botTargetY = Math.max(bot.botTargetY, 30);
+        if(bot.y > 85) bot.botTargetY = Math.min(bot.botTargetY, 70);
       } else {
-        bot.botWanderAngle += (Math.random()-.5)*0.4;
-        bot.botTargetX = Math.max(10, Math.min(90, bot.x + Math.cos(bot.botWanderAngle)*10));
-        bot.botTargetY = Math.max(10, Math.min(90, bot.y + Math.sin(bot.botWanderAngle)*10));
+        bot.botWanderAngle += (Math.random()-.5)*0.6;
+        bot.botTargetX = Math.max(10, Math.min(90, bot.x + Math.cos(bot.botWanderAngle)*12));
+        bot.botTargetY = Math.max(10, Math.min(90, bot.y + Math.sin(bot.botWanderAngle)*12));
       }
     }
     bot.botTargetX = Math.max(5,Math.min(95,bot.botTargetX));
