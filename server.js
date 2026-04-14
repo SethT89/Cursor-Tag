@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const PORT = process.env.PORT || 8080;
 const TAG_DISTANCE_PCT = 8;
+const ZOMBIE_TAG_DISTANCE_PCT = 4;
 const GAME_DURATION_MS = 60000;
 const ZOMBIE_GAME_DURATION_MS = 60 * 1000;
 const ZOMBIE_TURNING_MS = 3000;
@@ -610,7 +611,7 @@ function startZombieGame(roomCode){
   room.state='playing';room.gameStartTime=Date.now();room.lastTickTime=Date.now();
   room.eliminationOrder=[];room.zombieGameDone=false;
   zombieRoleCache.delete(roomCode);
-  broadcastToRoom(room,{type:'gameStarted',players:getPlayers(room),itPlayerId:pz.id,duration:ZOMBIE_GAME_DURATION_MS,tagDistance:TAG_DISTANCE_PCT,mode:'zombie',patientZeroId:pz.id});
+  broadcastToRoom(room,{type:'gameStarted',players:getPlayers(room),itPlayerId:pz.id,duration:ZOMBIE_GAME_DURATION_MS,tagDistance:ZOMBIE_TAG_DISTANCE_PCT,mode:'zombie',patientZeroId:pz.id});
   room.stateInterval=setInterval(()=>zombieTick(roomCode),100);
   room.gameTimer=setTimeout(()=>endZombieGame(roomCode,'timeout'),ZOMBIE_GAME_DURATION_MS);
 }
@@ -658,7 +659,7 @@ function zombieTick(roomCode){
       const dx=z.x-h.x,dy=z.y-h.y;
       const mZX=(z.x+(z.prevX||z.x))/2,mZY=(z.y+(z.prevY||z.y))/2;
       const mHX=(h.x+(h.prevX||h.x))/2,mHY=(h.y+(h.prevY||h.y))/2;
-      if(Math.sqrt(dx*dx+dy*dy)<TAG_DISTANCE_PCT||Math.sqrt((mZX-mHX)**2+(mZY-mHY)**2)<TAG_DISTANCE_PCT){
+      if(Math.sqrt(dx*dx+dy*dy)<ZOMBIE_TAG_DISTANCE_PCT||Math.sqrt((mZX-mHX)**2+(mZY-mHY)**2)<ZOMBIE_TAG_DISTANCE_PCT){
         infectHuman(room,z,h,now);
       }
     }
