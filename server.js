@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 8080;
 const TAG_DISTANCE_PCT = 8;
 const ZOMBIE_TAG_DISTANCE_PCT = 4;
 const GAME_DURATION_MS = 60000;
-const ZOMBIE_GAME_DURATION_MS = 60 * 1000;
+const ZOMBIE_GAME_DURATION_MS = 10 * 1000;
 const ZOMBIE_TURNING_MS = 3000;
 const COUNTDOWN_SECONDS = 3;
 const TAG_IMMUNITY_MS = 3000;
@@ -174,7 +174,7 @@ function getLiveScores(room) {
         score = Math.round(gameDuration * 10);
       } else if (p.isPatientZero) {
         // Bleeds down from 600 in real time + infection jumps
-        score = Math.max(0, Math.round(600 - gameDuration * 8) + p.infectCount * 120);
+        score = Math.max(0, Math.round(250 - gameDuration * 8) + p.infectCount * 150);
       } else {
         // Frozen at infection moment + 50 per infection caused
         const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
@@ -755,7 +755,7 @@ function endZombieGame(roomCode,reason){
       // Patient Zero: starts at 600, bleeds 8pts/sec, +120 per infection
       // Infect fast and often to win — do nothing and you end up low
       const elapsed = gameDuration / 1000;
-      score = Math.max(0, Math.round(600 - elapsed * 8) + p.infectCount * 120);
+      score = Math.max(0, Math.round(250 - elapsed * 8) + p.infectCount * 150);
     } else {
       // Infected: score freezes at infection moment (survivalSecs × 10) + 50 per infection caused
       const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
