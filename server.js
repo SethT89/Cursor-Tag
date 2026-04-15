@@ -174,7 +174,7 @@ function getLiveScores(room) {
         score = Math.round(gameDuration * 10);
       } else if (p.isPatientZero) {
         // Bleeds down from 600 in real time + infection jumps
-        score = Math.max(0, Math.round(250 - gameDuration * 8) + p.infectCount * 150);
+        score = Math.max(0, Math.round(150 - gameDuration * 15) + p.infectCount * 40);
       } else {
         // Frozen at infection moment + 50 per infection caused
         const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
@@ -750,12 +750,12 @@ function endZombieGame(roomCode,reason){
       // Survivor: 10pts/sec survived + 200 bonus for lasting the full game
       const survived = gameDuration / 1000;
       score = Math.round(survived * 10);
-      if(survived >= maxGameSec - 1) score += 200; // full game bonus
+      if(survived >= maxGameSec - 1) score += 300; // full game bonus
     } else if(p.isPatientZero){
       // Patient Zero: starts at 600, bleeds 8pts/sec, +120 per infection
       // Infect fast and often to win — do nothing and you end up low
       const elapsed = gameDuration / 1000;
-      score = Math.max(0, Math.round(250 - elapsed * 8) + p.infectCount * 150);
+      score = Math.max(0, Math.round(150 - elapsed * 15) + p.infectCount * 40);
     } else {
       // Infected: score freezes at infection moment (survivalSecs × 10) + 50 per infection caused
       const survivalSec = p.infectedAt ? (p.infectedAt - room.gameStartTime) / 1000 : 0;
@@ -767,7 +767,7 @@ function endZombieGame(roomCode,reason){
         survivalTime:p.infectedAt?Math.round((p.infectedAt-room.gameStartTime)/1000):Math.round(gameDuration/1000),
         isPatientZero:p.isPatientZero,survived:!p.isZombie&&!p.isTurning,totalDistance:Math.round(p.totalDistance)}};
   });
-  scored.sort((a,b)=>{if(a.isSurvivor&&!b.isSurvivor)return -1;if(!a.isSurvivor&&b.isSurvivor)return 1;return b.score-a.score;});
+  scored.sort((a,b)=>b.score-a.score);
   scored.forEach((p,i)=>{p.rank=i+1;});
   broadcastToRoom(room,{type:'gameEnded',players:scored,mode:'zombie',reason});
   room.cleanupTimer=setTimeout(()=>rooms.delete(roomCode),5*60*1000);
